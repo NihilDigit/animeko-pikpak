@@ -43,15 +43,26 @@ internal class PikPakAuth(
     private val username: String,
     private val password: String,
     val deviceId: String = generateDeviceId(),
+    initialRefreshToken: String = "",
+    /**
+     * Called after a successful signin or refresh so the caller can persist
+     * the latest [deviceId] + refresh token. Default no-op keeps the test
+     * surface small.
+     */
+    private val onTokenUpdated: suspend (deviceId: String, refreshToken: String) -> Unit = { _, _ -> },
     private val clock: Clock = Clock.System,
 ) {
     private val logger = logger<PikPakAuth>()
     private val mutex = Mutex()
 
-    @Volatile private var accessToken: String = ""
-    @Volatile private var refreshToken: String = ""
-    @Volatile private var tokenExpiresAt: Instant = Instant.DISTANT_PAST
-    @Volatile private var userId: String = ""
+    @Volatile internal var accessToken: String = ""
+        private set
+    @Volatile internal var refreshToken: String = initialRefreshToken
+        private set
+    @Volatile internal var tokenExpiresAt: Instant = Instant.DISTANT_PAST
+        private set
+    @Volatile internal var userId: String = ""
+        private set
 
     /**
      * The most recent captcha token from [captchaInit]. PikPak requires this
@@ -59,6 +70,20 @@ internal class PikPakAuth(
      */
     @Volatile var captchaToken: String = ""
         private set
+
+    /**
+     * Which `action` (e.g. `POST:https://.../drive/v1/files`) the cached
+     * [captchaToken] was issued for. PikPak scopes tokens to an action, so
+     * [ensureCaptchaFor] can only skip the re-init when the action matches.
+     */
+    @Volatile private var captchaAction: String = ""
+
+    /**
+     * When the cached [captchaToken] stops being valid. PikPak returns
+     * `expires_in` on captcha_init (observed: 300 s). We treat the token as
+     * stale 30 seconds before that to stay safely ahead of clock skew.
+     */
+    @Volatile private var captchaExpiresAt: Instant = Instant.DISTANT_PAST
 
     /**
      * Returns a valid bearer token, doing a login or refresh if needed.
@@ -183,6 +208,8 @@ internal class PikPakAuth(
             )
         }
         captchaToken = body.captcha_token
+        captchaAction = action
+        captchaExpiresAt = clock.now() + body.expires_in.seconds
         return body.captcha_token
     }
 
@@ -193,9 +220,33 @@ internal class PikPakAuth(
      * device-identifying meta (`captcha_sign` + client/package/user/timestamp).
      */
     suspend fun ensureCaptchaFor(action: String) {
+        // Fast path: a valid cached token for this exact action.
+        if (action == captchaAction &&
+            captchaToken.isNotEmpty() &&
+            clock.now() + CAPTCHA_REFRESH_BEFORE_EXPIRY < captchaExpiresAt
+        ) {
+            return
+        }
         mutex.withLock {
+            // Double-check after acquiring the lock — another coroutine may
+            // have just refreshed the same action.
+            if (action == captchaAction &&
+                captchaToken.isNotEmpty() &&
+                clock.now() + CAPTCHA_REFRESH_BEFORE_EXPIRY < captchaExpiresAt
+            ) {
+                return@withLock
+            }
             captchaInit(action = action, meta = buildClientInfoMeta())
         }
+    }
+
+    /**
+     * Force the next [ensureCaptchaFor] call to re-init, regardless of the
+     * cached expiry. Call this on captcha-invalid responses from the server.
+     */
+    fun invalidateCaptcha() {
+        captchaAction = ""
+        captchaExpiresAt = Instant.DISTANT_PAST
     }
 
     private fun buildClientInfoMeta(): Map<String, String> {
@@ -246,15 +297,21 @@ internal class PikPakAuth(
         else -> mapOf("username" to username)
     }
 
-    private fun acceptToken(token: AuthTokenResponse) {
+    private suspend fun acceptToken(token: AuthTokenResponse) {
         accessToken = token.access_token
         refreshToken = token.refresh_token.ifEmpty { refreshToken }
         tokenExpiresAt = clock.now() + token.expires_in.seconds
         if (token.sub.isNotEmpty()) userId = token.sub
+        // Best-effort persistence. Failure here must not sabotage auth —
+        // we already have a working token in memory, the only cost of a
+        // missed persist is a full signin next session.
+        runCatching { onTokenUpdated(deviceId, refreshToken) }
+            .onFailure { logger.warn(it) { "PikPak token persistence failed (non-fatal)" } }
     }
 
     companion object {
         private val REFRESH_BEFORE_EXPIRY = 60.seconds
+        private val CAPTCHA_REFRESH_BEFORE_EXPIRY = 30.seconds
         private val EMAIL_REGEX = Regex("""[\w.+-]+@\w+(\.\w+)+""")
         private val PHONE_REGEX = Regex("""\d{11,18}""")
 

@@ -15,7 +15,9 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import me.him188.ani.torrent.offline.OfflineDownloadRejectedException
+import me.him188.ani.torrent.pikpak.models.BatchIdsRequest
 import me.him188.ani.torrent.pikpak.models.FileInfo
+import me.him188.ani.torrent.pikpak.models.FileListResponse
 import me.him188.ani.torrent.pikpak.models.OfflineTask
 import me.him188.ani.torrent.pikpak.models.SubmitOfflineTaskRequest
 import me.him188.ani.torrent.pikpak.models.SubmitOfflineTaskResponse
@@ -35,12 +37,7 @@ internal class PikPakClient(
     /** Submit a magnet URI or `.torrent` URL to the offline-download queue. */
     suspend fun submitOfflineTask(uri: String, name: String): OfflineTask {
         val url = "https://${PikPakConstants.API_HOST}/drive/v1/files"
-        // Ensure auth first (may set captchaToken for the signin action as a
-        // side-effect); then refresh it for THIS action — otherwise PikPak
-        // rejects with 400 captcha_invalid.
-        auth.getAccessToken()
-        auth.ensureCaptchaFor("POST:$url")
-        val response = authedPost(url) {
+        val response = postWithCaptcha(url) {
             contentType(ContentType.Application.Json)
             setBody(
                 SubmitOfflineTaskRequest(
@@ -87,6 +84,66 @@ internal class PikPakClient(
     }
 
     /**
+     * List non-trashed immediate children of a folder. Used to pick an episode
+     * out of a season-pack folder. Caller should follow [FileListResponse.nextPageToken]
+     * for large folders; most season packs fit in one page (default 200).
+     */
+    suspend fun listFiles(
+        parentId: String,
+        limit: Int = 200,
+        pageToken: String? = null,
+    ): FileListResponse {
+        val url = "https://${PikPakConstants.API_HOST}/drive/v1/files"
+        val response = authedGet(url) {
+            parameter("parent_id", parentId)
+            parameter("limit", limit)
+            parameter("filters", """{"trashed":{"eq":false}}""")
+            if (!pageToken.isNullOrEmpty()) parameter("page_token", pageToken)
+        }
+        return response.decodeOrReject("list files")
+    }
+
+    /**
+     * Move the given file ids to the PikPak recycle bin. Files there survive
+     * ~30 days before PikPak auto-purges them; a caller can still restore via
+     * the web UI in the meantime.
+     */
+    suspend fun batchTrash(ids: List<String>) {
+        if (ids.isEmpty()) return
+        val url = "https://${PikPakConstants.API_HOST}/drive/v1/files:batchTrash"
+        val response = postWithCaptcha(url) {
+            contentType(ContentType.Application.Json)
+            setBody(BatchIdsRequest(ids))
+        }
+        if (!response.status.isSuccess()) {
+            val snippet = runCatching { response.bodyAsText().take(400) }.getOrDefault("")
+            throw OfflineDownloadRejectedException(
+                "PikPak batchTrash failed: status=${response.status} body=$snippet",
+            )
+        }
+    }
+
+    /**
+     * Permanently delete the given file ids. Bypasses the recycle bin — the
+     * files are gone immediately. Use [batchTrash] unless you specifically
+     * need this.
+     */
+    suspend fun batchDelete(ids: List<String>) {
+        if (ids.isEmpty()) return
+        val url = "https://${PikPakConstants.API_HOST}/drive/v1/files:batchDelete"
+        val response = postWithCaptcha(url) {
+            contentType(ContentType.Application.Json)
+            setBody(BatchIdsRequest(ids))
+        }
+        if (!response.status.isSuccess()) {
+            val snippet = runCatching { response.bodyAsText().take(400) }.getOrDefault("")
+            throw OfflineDownloadRejectedException(
+                "PikPak batchDelete failed: status=${response.status} body=$snippet",
+            )
+        }
+    }
+
+    /**
      * Decode the body as [T] if the status is 2xx; otherwise read the body as
      * plain text and raise an [OfflineDownloadRejectedException] containing
      * the provider's error payload. Keeps the "malformed payload is a bug"
@@ -101,6 +158,21 @@ internal class PikPakClient(
             )
         }
         return body()
+    }
+
+    /**
+     * POST a captcha-gated endpoint. Refreshes the per-action captcha token
+     * first (the cache in [PikPakAuth] makes this ~free inside the 5-minute
+     * TTL window) and then sends the request via [authedPost], which handles
+     * 401-driven bearer retries on its own.
+     */
+    private suspend fun postWithCaptcha(
+        url: String,
+        block: io.ktor.client.request.HttpRequestBuilder.() -> Unit,
+    ): HttpResponse {
+        auth.getAccessToken()
+        auth.ensureCaptchaFor("POST:$url")
+        return authedPost(url, block)
     }
 
     // --- transport helpers ---

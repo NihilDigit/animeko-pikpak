@@ -24,6 +24,20 @@ internal data class FileInfo(
      * [webContentLink]).
      */
     val medias: List<PikPakMedia> = emptyList(),
+) {
+    /** PikPak uses `drive#folder` for directories, `drive#file` for files. */
+    val isFolder: Boolean get() = kind == "drive#folder"
+}
+
+/**
+ * Response from `GET /drive/v1/files?parent_id=...` — used when listing the
+ * children of a folder (e.g. the per-episode files inside a season-pack
+ * torrent that PikPak unpacked into a directory).
+ */
+@Serializable
+internal data class FileListResponse(
+    val files: List<FileInfo> = emptyList(),
+    @SerialName("next_page_token") val nextPageToken: String? = null,
 )
 
 @Serializable
@@ -58,4 +72,13 @@ internal data class MediaLink(
     val type: String = "",
     val mirrors: List<String> = emptyList(),
     val fallbacks: List<String> = emptyList(),
+)
+
+/**
+ * Request body shared by `POST /drive/v1/files:batchTrash` and
+ * `POST /drive/v1/files:batchDelete`.
+ */
+@Serializable
+internal data class BatchIdsRequest(
+    val ids: List<String>,
 )

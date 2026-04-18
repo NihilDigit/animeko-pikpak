@@ -39,8 +39,10 @@ import me.him188.ani.app.domain.media.resolver.MediaResolver
 import me.him188.ani.app.domain.media.resolver.OfflineDownloadMediaResolver
 import me.him188.ani.app.domain.media.resolver.TorrentMediaResolver
 import me.him188.ani.torrent.offline.OfflineDownloadEngine
+import me.him188.ani.app.data.models.preference.PikPakConfig
 import me.him188.ani.torrent.pikpak.PikPakCredentials
 import me.him188.ani.torrent.pikpak.PikPakOfflineDownloadEngine
+import me.him188.ani.torrent.pikpak.PikPakTokenStore
 import me.him188.ani.app.domain.mediasource.web.AndroidWebCaptchaCoordinator
 import me.him188.ani.app.domain.mediasource.web.WebCaptchaCoordinator
 import me.him188.ani.app.domain.settings.ProxyProvider
@@ -174,17 +176,30 @@ fun getAndroidModules(
     }
 
     single<OfflineDownloadEngine> {
-        val credentialsFlow = get<SettingsRepository>().pikpakConfig.flow
+        val settings = get<SettingsRepository>()
+        val configState = settings.pikpakConfig.flow
+            .stateIn(coroutineScope, SharingStarted.Eagerly, initialValue = PikPakConfig.Default)
+        val credentialsFlow = configState
             .map { cfg ->
                 if (cfg.enabled && cfg.username.isNotEmpty() && cfg.password.isNotEmpty()) {
                     PikPakCredentials(cfg.username, cfg.password)
                 } else null
             }
             .stateIn(coroutineScope, SharingStarted.Eagerly, initialValue = null)
+        val tokenStore = object : PikPakTokenStore {
+            override val deviceId: String get() = configState.value.deviceId
+            override val refreshToken: String get() = configState.value.refreshToken
+            override suspend fun update(deviceId: String, refreshToken: String) {
+                settings.pikpakConfig.update {
+                    copy(deviceId = deviceId, refreshToken = refreshToken)
+                }
+            }
+        }
         PikPakOfflineDownloadEngine(
             httpClient = get<HttpClientProvider>().get(ScopedHttpClientUserAgent.ANI),
             credentials = credentialsFlow,
             scope = coroutineScope,
+            tokenStore = tokenStore,
         )
     }
     factory<MediaResolver> {

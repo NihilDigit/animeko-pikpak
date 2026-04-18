@@ -26,11 +26,21 @@ interface OfflineDownloadEngine {
      * Submit the magnet (or http `.torrent` URL) to the provider, wait for the
      * offline download to finish, and return a playable HTTPS URL plus metadata.
      *
+     * For multi-file torrents (season packs), the provider typically returns a
+     * folder. The engine asks [pickVideoFile] to choose one of the folder's
+     * children by filename; implementations should supply the caller's normal
+     * file-selection logic here (e.g. reuse upstream's
+     * `TorrentMediaResolver.selectVideoFileEntry`). Single-file torrents skip
+     * the callback entirely.
+     *
      * Throws on failure; callers translate exceptions to domain-level
      * `MediaResolutionException`. Coroutine cancellation cancels the resolve
      * cleanly.
      */
-    suspend fun resolve(uri: String): ResolvedMedia
+    suspend fun resolve(
+        uri: String,
+        pickVideoFile: (candidateFilenames: List<String>) -> String? = { null },
+    ): ResolvedMedia
 }
 
 /**
@@ -49,6 +59,13 @@ data class ResolvedMedia(
     val expiresAt: Instant? = null,
     val fileName: String? = null,
     val fileSize: Long? = null,
+    /**
+     * Provider-side file identifier, if any. Surfaced so callers (and tests)
+     * can issue a follow-up cleanup — e.g. trash/delete the PikPak file after
+     * the stream URL has been handed off. Null for providers without a concept
+     * of server-side file ids.
+     */
+    val providerFileId: String? = null,
 )
 
 /**

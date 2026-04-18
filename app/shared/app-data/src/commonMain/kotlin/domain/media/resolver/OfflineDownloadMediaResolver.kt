@@ -47,11 +47,29 @@ class OfflineDownloadMediaResolver(
             else -> throw UnsupportedMediaException(media)
         }
 
+        // Season-pack handling: when the provider unpacks a multi-file torrent
+        // into a folder, the engine asks us which child video to pick. Reuse
+        // the same selection logic anitorrent uses (`selectVideoFileEntry`) so
+        // offline and local-torrent picks behave identically.
+        val episodeTitles = buildList {
+            if (episode.title.isNotBlank()) add(episode.title)
+            if (media.originalTitle.isNotBlank()) add(media.originalTitle)
+        }
+        val pickVideoFile: (List<String>) -> String? = { names ->
+            TorrentMediaResolver.selectVideoFileEntry(
+                entries = names,
+                getPath = { this },
+                episodeTitles = episodeTitles,
+                episodeSort = episode.sort,
+                episodeEp = episode.ep,
+            )
+        }
+
         logger.info {
             "[${engine.id}] resolving media '${media.mediaId}' via ${engine.displayName}"
         }
         val resolved = try {
-            engine.resolve(uri)
+            engine.resolve(uri, pickVideoFile)
         } catch (e: OfflineDownloadAuthException) {
             logger.warn(e) { "${engine.id} auth failed" }
             throw MediaResolutionException(ResolutionFailures.ENGINE_ERROR, e)
