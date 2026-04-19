@@ -330,6 +330,7 @@ fun getIosModules(
             credentials = credentialsFlow,
             scope = coroutineScope,
             sessionStore = sessionStore,
+            slotQueueLength = { configState.value.slotQueueLength },
         )
     }
     factory<MediaResolver> {

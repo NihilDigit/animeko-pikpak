@@ -67,7 +67,23 @@ class PikPakOfflineDownloadEngine(
     private val pollInterval: Duration = 2.seconds,
     private val resolveTimeout: Duration = 5.minutes,
     private val slotFolderName: String = "Animeko-Playing",
+    /**
+     * Supplies the user's desired slot-queue length at resolve time. Reading
+     * the lambda per-resolve means the engine picks up setting changes without
+     * needing a restart. Values `>= SLOT_QUEUE_UNLIMITED_SENTINEL` disable
+     * eviction entirely.
+     */
+    private val slotQueueLength: () -> Int = { 1 },
 ) : OfflineDownloadEngine {
+
+    companion object {
+        /**
+         * When [slotQueueLength] returns this (or more), the engine stops
+         * evicting stale buckets — the user's PikPak drive becomes the limit.
+         * Matches `PikPakConfig.SLOT_QUEUE_UNLIMITED` on the app side.
+         */
+        const val SLOT_QUEUE_UNLIMITED_SENTINEL: Int = 14
+    }
 
     private val logger = logger<PikPakOfflineDownloadEngine>()
 
@@ -169,15 +185,26 @@ class PikPakOfflineDownloadEngine(
                 }
             }
 
-            // Slot miss → drain everything that isn't this bucket. Keeps the
-            // user's drive from accumulating old sources indefinitely while
-            // still preserving the current one for the lookup path above on
-            // subsequent resolves.
-            val stale = topEntries.filter { it.name != sourceKey }
-            if (stale.isNotEmpty()) {
-                logger.info { "[pikpak] draining slot: deleting ${stale.size} non-matching bucket(s)" }
-                runCatching { client.batchDelete(stale.map { it.id }) }
-                    .onFailure { logger.warn(it) { "[pikpak] slot drain failed (non-fatal)" } }
+            // Slot miss → evict to honor the user-configured queue length.
+            // queueLength = 1 : single-slot, drop everything except this bucket
+            // queueLength = N : keep the (N-1) newest non-current buckets plus
+            //                   room for this resolve's bucket once it lands
+            // queueLength >= SLOT_QUEUE_UNLIMITED_SENTINEL : no eviction
+            val queueLen = slotQueueLength().coerceAtLeast(1)
+            if (queueLen < SLOT_QUEUE_UNLIMITED_SENTINEL) {
+                val others = topEntries.filter { it.name != sourceKey }
+                // PikPak returns FileStat.createdTime as ISO-8601 strings;
+                // lexicographic sort matches chronological order.
+                val sortedNewestFirst = others.sortedByDescending { it.createdTime }
+                val keepCount = (queueLen - 1).coerceAtLeast(0)
+                val toEvict = sortedNewestFirst.drop(keepCount)
+                if (toEvict.isNotEmpty()) {
+                    logger.info { "[pikpak] draining slot: keeping $keepCount newest, deleting ${toEvict.size}" }
+                    runCatching { client.batchDelete(toEvict.map { it.id }) }
+                        .onFailure { logger.warn(it) { "[pikpak] slot drain failed (non-fatal)" } }
+                }
+            } else {
+                logger.debug { "[pikpak] slot queue length = unlimited; skipping eviction" }
             }
 
             // Ensure this source's bucket exists, and submit the task *into
@@ -268,21 +295,6 @@ class PikPakOfflineDownloadEngine(
 
     private data class SlotEntry(val id: String, val name: String)
 
-    /**
-     * Deterministic cache key for a resolve source. Magnet URIs use the
-     * infohash (40-char hex); HTTP `.torrent` URLs fall back to a stable
-     * short hash of the URL string. The result is used as a sub-folder name
-     * under the slot, which means it also has to be a valid PikPak filename
-     * — infohashes are fine, and the `h-` prefix on the fallback avoids
-     * clashing with them.
-     */
-    private fun sourceKeyFor(uri: String): String {
-        val infoHash = Regex("xt=urn:btih:([A-Za-z0-9]+)", RegexOption.IGNORE_CASE)
-            .find(uri)?.groupValues?.get(1)
-        if (!infoHash.isNullOrEmpty()) return infoHash.uppercase()
-        return "h-" + uri.hashCode().toLong().toString(16).removePrefix("-")
-    }
-
     private fun scheduleCleanup(client: PikPakClient, fileId: String?) {
         if (fileId.isNullOrEmpty()) return
         scope.launch {
@@ -369,4 +381,20 @@ class PikPakOfflineDownloadEngine(
             providerFileId = file.id.takeIf { it.isNotEmpty() },
         )
     }
+}
+
+/**
+ * Deterministic cache key for a resolve source. Magnet URIs use the infohash
+ * (40-char hex, uppercased for filesystem stability); HTTP `.torrent` URLs
+ * fall back to a stable short hash of the URL string. The result is used as
+ * a sub-folder name under the engine's working folder, which means it has
+ * to be a valid PikPak filename — infohashes are fine, and the `h-` prefix
+ * on the fallback avoids clashing with them. Exposed `internal` so commonTest
+ * can exercise the extraction rules without spinning up the engine.
+ */
+internal fun sourceKeyFor(uri: String): String {
+    val infoHash = Regex("xt=urn:btih:([A-Za-z0-9]+)", RegexOption.IGNORE_CASE)
+        .find(uri)?.groupValues?.get(1)
+    if (!infoHash.isNullOrEmpty()) return infoHash.uppercase()
+    return "h-" + uri.hashCode().toLong().toString(16).removePrefix("-")
 }

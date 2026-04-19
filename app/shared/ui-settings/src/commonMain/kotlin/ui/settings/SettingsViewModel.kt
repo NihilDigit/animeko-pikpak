@@ -151,7 +151,7 @@ class SettingsViewModel : AbstractSettingsViewModel(), KoinComponent {
         },
     )
 
-    private val mediaSelectorSettingsState: SettingsState<MediaSelectorSettings> =
+    internal val mediaSelectorSettingsState: SettingsState<MediaSelectorSettings> =
         settingsRepository.mediaSelectorSettings.stateInBackground(MediaSelectorSettings.Default.copy(_placeholder = -1))
 
     private val defaultMediaPreferenceState =

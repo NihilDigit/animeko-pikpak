@@ -21,19 +21,14 @@ class PikPakSessionStoreAdapter(
 ) : SessionStore {
 
     override suspend fun load(account: String): Session? {
-        // TEMPORARY: always force fresh signin. Why:
-        // The SDK's HttpEngine.requestRaw uses the HttpClient we pass in.
-        // animeko's ScopedHttpClient ships with `expectSuccess = true`, so
-        // when PikPak returns HTTP 400 on an expired/revoked refresh token,
-        // Ktor throws ClientRequestException *before* the SDK can inspect
-        // the JSON `error_code=4126` and fall through to signInLocked.
-        // Result: a stale refresh_token in our DataStore wedges the engine
-        // permanently.
-        // Proper fix lives in pikpak-kotlin SDK: `expectSuccess = false`
-        // per-request in the auth path. Until that ships, returning null
-        // forces every resolve() to do a fresh signin (costs one extra
-        // captcha-init + auth/signin round trip per app launch — cheap).
-        return null
+        val rt = readRefreshToken()
+        if (rt.isEmpty()) return null
+        return Session(
+            accessToken = "",
+            refreshToken = rt,
+            sub = "",
+            expiresAt = 0L,
+        )
     }
 
     override suspend fun save(account: String, session: Session) {

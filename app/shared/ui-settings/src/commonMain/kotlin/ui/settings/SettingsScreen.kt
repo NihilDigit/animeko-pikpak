@@ -343,7 +343,10 @@ fun SettingsScreen(
                             )
 
                             SettingsTab.BT -> TorrentEngineGroup(vm.torrentSettingsState)
-                            SettingsTab.PIKPAK -> PikPakSettingsGroup(vm.pikpakSettingsState)
+                            SettingsTab.PIKPAK -> PikPakSettingsGroup(
+                                vm.pikpakSettingsState,
+                                vm.mediaSelectorSettingsState,
+                            )
 //                            SettingsTab.CACHE -> AutoCacheGroup(vm.mediaCacheSettingsState)
                             SettingsTab.STORAGE -> CacheDirectoryGroup(vm.cacheDirectoryGroupState)
                             SettingsTab.SETTINGS_BACKUP -> BackupSettings(vm.cacheDirectoryGroupState)

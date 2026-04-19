@@ -155,6 +155,7 @@ fun getDesktopModules(getContext: () -> DesktopContext, scope: CoroutineScope) =
             credentials = credentialsFlow,
             scope = scope,
             sessionStore = sessionStore,
+            slotQueueLength = { configState.value.slotQueueLength },
         )
     }
     factory<MediaResolver> {

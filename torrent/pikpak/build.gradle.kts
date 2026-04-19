@@ -43,6 +43,10 @@ kotlin {
         // layer on top. See https://github.com/NihilDigit/pikpak-kotlin.
         api("io.github.nihildigit:pikpak-kotlin:0.3.1")
     }
+    sourceSets.commonTest.dependencies {
+        implementation(kotlin("test"))
+        implementation(libs.kotlinx.coroutines.test)
+    }
     sourceSets.getByName("desktopTest").dependencies {
         implementation(libs.kotlinx.coroutines.test)
         implementation(kotlin("test"))
