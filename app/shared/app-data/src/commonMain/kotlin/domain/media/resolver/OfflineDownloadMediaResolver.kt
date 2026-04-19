@@ -78,9 +78,14 @@ class OfflineDownloadMediaResolver(
         }
         val resolved = try {
             engine.resolve(uri, pickVideoFile)
-        } catch (e: CancellationException) {
-            throw e
         } catch (e: Throwable) {
+            // A caller cancel must propagate, but [TimeoutCancellationException]
+            // (also a CancellationException) is the engine signalling "I didn't
+            // deliver in time" — that's a legitimate engine failure and should
+            // still reach fallback, not be mistaken for a user stop.
+            if (e is CancellationException && e !is TimeoutCancellationException) {
+                throw e
+            }
             val reason = when (e) {
                 is OfflineDownloadAuthException -> ResolutionFailures.ENGINE_ERROR
                 is OfflineDownloadRejectedException -> ResolutionFailures.NO_MATCHING_RESOURCE
