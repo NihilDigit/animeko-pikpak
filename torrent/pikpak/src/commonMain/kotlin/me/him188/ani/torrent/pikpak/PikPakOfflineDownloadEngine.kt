@@ -2,6 +2,7 @@ package me.him188.ani.torrent.pikpak
 
 import io.github.nihildigit.pikpak.FileDetail
 import io.github.nihildigit.pikpak.FileKind
+import io.github.nihildigit.pikpak.FileStat
 import io.github.nihildigit.pikpak.PikPakClient
 import io.github.nihildigit.pikpak.SessionStore
 import io.github.nihildigit.pikpak.batchDelete
@@ -186,24 +187,13 @@ class PikPakOfflineDownloadEngine(
             }
 
             // Slot miss → evict to honor the user-configured queue length.
-            // queueLength = 1 : single-slot, drop everything except this bucket
-            // queueLength = N : keep the (N-1) newest non-current buckets plus
-            //                   room for this resolve's bucket once it lands
-            // queueLength >= SLOT_QUEUE_UNLIMITED_SENTINEL : no eviction
             val queueLen = slotQueueLength().coerceAtLeast(1)
-            if (queueLen < SLOT_QUEUE_UNLIMITED_SENTINEL) {
-                val others = topEntries.filter { it.name != sourceKey }
-                // PikPak returns FileStat.createdTime as ISO-8601 strings;
-                // lexicographic sort matches chronological order.
-                val sortedNewestFirst = others.sortedByDescending { it.createdTime }
-                val keepCount = (queueLen - 1).coerceAtLeast(0)
-                val toEvict = sortedNewestFirst.drop(keepCount)
-                if (toEvict.isNotEmpty()) {
-                    logger.info { "[pikpak] draining slot: keeping $keepCount newest, deleting ${toEvict.size}" }
-                    runCatching { client.batchDelete(toEvict.map { it.id }) }
-                        .onFailure { logger.warn(it) { "[pikpak] slot drain failed (non-fatal)" } }
-                }
-            } else {
+            val toEvict = pickEvictions(topEntries, sourceKey, queueLen)
+            if (toEvict.isNotEmpty()) {
+                logger.info { "[pikpak] draining slot: keeping ${(queueLen - 1).coerceAtLeast(0)} newest, deleting ${toEvict.size}" }
+                runCatching { client.batchDelete(toEvict) }
+                    .onFailure { logger.warn(it) { "[pikpak] slot drain failed (non-fatal)" } }
+            } else if (queueLen >= SLOT_QUEUE_UNLIMITED_SENTINEL) {
                 logger.debug { "[pikpak] slot queue length = unlimited; skipping eviction" }
             }
 
@@ -362,25 +352,34 @@ class PikPakOfflineDownloadEngine(
         }
     }
 
-    private fun buildResolvedMedia(file: FileDetail): ResolvedMedia {
-        val streamUrl = file.downloadUrl
-            ?: file.webContentLink.takeIf { it.isNotEmpty() }
-            ?: throw OfflineDownloadRejectedException(
-                "PikPak file has no playable link (file_id=${file.id})",
-            )
+}
 
-        val expiresAt: Instant? = file.links.octetStream.expire
-            .takeIf { it.isNotEmpty() }
-            ?.let { runCatching { Instant.parse(it) }.getOrNull() }
-
-        return ResolvedMedia(
-            streamUrl = streamUrl,
-            expiresAt = expiresAt,
-            fileName = file.name.takeIf { it.isNotEmpty() },
-            fileSize = file.size.toLongOrNull(),
-            providerFileId = file.id.takeIf { it.isNotEmpty() },
+/**
+ * Maps a PikPak [FileDetail] to the [ResolvedMedia] we hand to mediamp.
+ * Prefers `links.octet-stream` over the legacy `web_content_link`; throws
+ * [OfflineDownloadRejectedException] when neither is present (a file still
+ * being processed server-side, or an access-denied record). Exposed
+ * `internal` so commonTest can exercise URL selection without spinning up
+ * the engine.
+ */
+internal fun buildResolvedMedia(file: FileDetail): ResolvedMedia {
+    val streamUrl = file.downloadUrl
+        ?: file.webContentLink.takeIf { it.isNotEmpty() }
+        ?: throw OfflineDownloadRejectedException(
+            "PikPak file has no playable link (file_id=${file.id})",
         )
-    }
+
+    val expiresAt: Instant? = file.links.octetStream.expire
+        .takeIf { it.isNotEmpty() }
+        ?.let { runCatching { Instant.parse(it) }.getOrNull() }
+
+    return ResolvedMedia(
+        streamUrl = streamUrl,
+        expiresAt = expiresAt,
+        fileName = file.name.takeIf { it.isNotEmpty() },
+        fileSize = file.size.toLongOrNull(),
+        providerFileId = file.id.takeIf { it.isNotEmpty() },
+    )
 }
 
 /**
@@ -397,4 +396,34 @@ internal fun sourceKeyFor(uri: String): String {
         .find(uri)?.groupValues?.get(1)
     if (!infoHash.isNullOrEmpty()) return infoHash.uppercase()
     return "h-" + uri.hashCode().toLong().toString(16).removePrefix("-")
+}
+
+/**
+ * Decides which top-level slot entries to [batchDelete][io.github.nihildigit.pikpak.batchDelete]
+ * based on the user-configured queue length. Pure function — no network, no
+ * mutation — so commonTest can cover the policy edges (single-slot, N-slot,
+ * unlimited, entry ordering) without touching PikPakClient.
+ *
+ * Semantics:
+ *  - `queueLength >= SLOT_QUEUE_UNLIMITED_SENTINEL` → return empty (no eviction).
+ *  - Otherwise: keep the current-source bucket (never evicted, even if it's
+ *    the oldest) plus the `(queueLength - 1)` newest of the remaining
+ *    buckets; evict everything else.
+ *  - Bucket age is read from [FileStat.createdTime], which PikPak returns as
+ *    ISO-8601 strings — lexicographic sort matches chronological order.
+ *
+ * @return the `id`s of entries to delete. May be empty.
+ */
+internal fun pickEvictions(
+    topEntries: List<FileStat>,
+    currentSourceKey: String,
+    queueLength: Int,
+): List<String> {
+    if (queueLength >= PikPakOfflineDownloadEngine.SLOT_QUEUE_UNLIMITED_SENTINEL) return emptyList()
+    val others = topEntries.filter { it.name != currentSourceKey }
+    val keepCount = (queueLength - 1).coerceAtLeast(0)
+    return others
+        .sortedByDescending { it.createdTime }
+        .drop(keepCount)
+        .map { it.id }
 }
