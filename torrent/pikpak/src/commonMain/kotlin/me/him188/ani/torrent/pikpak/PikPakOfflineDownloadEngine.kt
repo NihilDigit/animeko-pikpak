@@ -1,5 +1,6 @@
 package me.him188.ani.torrent.pikpak
 
+import io.github.nihildigit.pikpak.CreateUrlResult
 import io.github.nihildigit.pikpak.FileDetail
 import io.github.nihildigit.pikpak.FileKind
 import io.github.nihildigit.pikpak.FileStat
@@ -12,6 +13,7 @@ import io.github.nihildigit.pikpak.getOrCreateDeepFolderId
 import io.github.nihildigit.pikpak.listFiles
 import io.github.nihildigit.pikpak.listOfflineTasks
 import io.ktor.client.HttpClient
+import kotlin.concurrent.Volatile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
@@ -218,14 +220,32 @@ class PikPakOfflineDownloadEngine(
 
             try {
                 logger.info { "[pikpak] submit offline task for ${uri.take(60)}... bucket=$sourceKey" }
-                val task = client.createUrlFile(parentId = bucketId, url = uri)
-                logger.debug {
-                    "[pikpak] submitted task id=${task.id} file_id=${task.fileId} file_name=${task.fileName}"
-                }
-                if (task.fileId.isNotEmpty()) failureCleanupId = task.fileId
-
-                val fileId = awaitCompletion(client, task.id, task.fileId) { observed ->
-                    failureCleanupId = observed
+                val fileId = when (val result = client.createUrlFile(parentId = bucketId, url = uri)) {
+                    is CreateUrlResult.Queued -> {
+                        val task = result.task
+                        logger.debug {
+                            "[pikpak] submitted task id=${task.id} file_id=${task.fileId} file_name=${task.fileName}"
+                        }
+                        if (task.fileId.isNotEmpty()) failureCleanupId = task.fileId
+                        awaitCompletion(client, task.id, task.fileId) { observed ->
+                            failureCleanupId = observed
+                        }
+                    }
+                    // PikPak recognised the URL's content as already cached on
+                    // their side and dropped the file straight into our bucket
+                    // without queuing a task. The bucket is per-source, so the
+                    // newest entry by createdTime is ours.
+                    CreateUrlResult.InstantComplete -> {
+                        logger.info {
+                            "[pikpak] instant-complete for bucket=$sourceKey; recovering landed file from bucket listing"
+                        }
+                        val landed = client.listFiles(parentId = bucketId)
+                            .maxByOrNull { it.createdTime }
+                            ?: throw OfflineDownloadRejectedException(
+                                "PikPak reported instant-complete but bucket $sourceKey is empty after submission",
+                            )
+                        landed.id
+                    }
                 }
                 failureCleanupId = fileId
 
