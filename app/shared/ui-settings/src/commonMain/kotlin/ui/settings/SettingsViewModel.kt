@@ -88,6 +88,9 @@ import me.him188.ani.app.ui.user.SelfInfoStateProducer
 import me.him188.ani.danmaku.ui.DanmakuConfig
 import me.him188.ani.datasources.api.source.ConnectionStatus
 import me.him188.ani.datasources.bangumi.BangumiClient
+import me.him188.ani.app.domain.foundation.ScopedHttpClientUserAgent
+import me.him188.ani.torrent.pikpak.testPikPakLogin
+import me.him188.ani.utils.ktor.UnsafeScopedHttpClientApi
 import me.him188.ani.utils.coroutines.IO_
 import me.him188.ani.utils.coroutines.SingleTaskExecutor
 import org.koin.core.component.KoinComponent
@@ -135,6 +138,26 @@ class SettingsViewModel : AbstractSettingsViewModel(), KoinComponent {
 
     val pikpakSettingsState: SettingsState<PikPakConfig> =
         settingsRepository.pikpakConfig.stateInBackground(PikPakConfig.Default)
+
+    // Probes PikPak auth with the currently-displayed credentials. Once the
+    // engine has saved a refresh token and wiped the plaintext password from
+    // disk, we still have a valid auth path — so NOT_ENABLED requires both
+    // fields blank, not just the password.
+    val pikpakConnectionTester: ConnectionTester = ConnectionTester(id = "pikpak") {
+        val cfg = pikpakSettingsState.value
+        if (cfg.username.isEmpty() || (cfg.password.isEmpty() && cfg.refreshToken.isEmpty())) {
+            ConnectionTestResult.NOT_ENABLED
+        } else {
+            @OptIn(UnsafeScopedHttpClientApi::class)
+            val http = clientProvider.get(ScopedHttpClientUserAgent.ANI)
+                .borrowForever().client
+            if (testPikPakLogin(cfg.username, cfg.password, cfg.refreshToken, http)) {
+                ConnectionTestResult.SUCCESS
+            } else {
+                ConnectionTestResult.FAILED
+            }
+        }
+    }
 
     val cacheDirectoryGroupState = CacheDirectoryGroupState(
         mediaCacheSettingsState,

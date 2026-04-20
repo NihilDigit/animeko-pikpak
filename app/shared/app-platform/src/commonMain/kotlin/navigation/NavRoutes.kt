@@ -170,7 +170,6 @@ enum class SettingsTab {
 
     PROXY,
     BT,
-    CLOUD_OFFLINE,
 
     //    CACHE, // 自动缓存, 4.10 删除
     STORAGE,

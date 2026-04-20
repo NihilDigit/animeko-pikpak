@@ -31,7 +31,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountCircle
-import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Feedback
 import androidx.compose.material.icons.outlined.FilterList
 import androidx.compose.material.icons.outlined.Info
@@ -121,7 +120,6 @@ import me.him188.ani.app.ui.lang.settings_tab_debug
 import me.him188.ani.app.ui.lang.settings_tab_log
 import me.him188.ani.app.ui.lang.settings_tab_media_selector
 import me.him188.ani.app.ui.lang.settings_tab_media_source
-import me.him188.ani.app.ui.lang.settings_tab_cloud_offline
 import me.him188.ani.app.ui.lang.settings_tab_player
 import me.him188.ani.app.ui.lang.settings_tab_proxy
 import me.him188.ani.app.ui.lang.settings_tab_settings_backup
@@ -146,7 +144,7 @@ import me.him188.ani.app.ui.settings.tabs.media.BackupSettings
 import me.him188.ani.app.ui.settings.tabs.media.CacheDirectoryGroup
 import me.him188.ani.app.ui.settings.tabs.media.MediaSelectionGroup
 import me.him188.ani.app.ui.settings.tabs.media.TorrentEngineGroup
-import me.him188.ani.app.ui.settings.tabs.cloudoffline.CloudOfflineGroup
+import me.him188.ani.app.ui.settings.tabs.media.PikPakAcceleratorGroup
 import me.him188.ani.app.ui.settings.tabs.media.source.MediaSourceGroup
 import me.him188.ani.app.ui.settings.tabs.media.source.MediaSourceSubscriptionGroup
 import me.him188.ani.app.ui.settings.tabs.network.ConfigureProxyGroup
@@ -246,7 +244,6 @@ fun SettingsScreen(
             Item(SettingsTab.SERVER)
             Item(SettingsTab.PROXY)
             Item(SettingsTab.BT)
-            Item(SettingsTab.CLOUD_OFFLINE)
 //            Item(SettingsTab.CACHE)
             Item(SettingsTab.STORAGE)
 
@@ -342,11 +339,14 @@ fun SettingsScreen(
                                 onStartProxyTestLoop = { vm.startProxyTesterLoop() },
                             )
 
-                            SettingsTab.BT -> TorrentEngineGroup(vm.torrentSettingsState)
-                            SettingsTab.CLOUD_OFFLINE -> CloudOfflineGroup(
-                                vm.pikpakSettingsState,
-                                vm.mediaSelectorSettingsState,
-                            )
+                            SettingsTab.BT -> {
+                                TorrentEngineGroup(vm.torrentSettingsState)
+                                PikPakAcceleratorGroup(
+                                    vm.pikpakSettingsState,
+                                    vm.mediaSelectorSettingsState,
+                                    vm.pikpakConnectionTester,
+                                )
+                            }
 //                            SettingsTab.CACHE -> AutoCacheGroup(vm.mediaCacheSettingsState)
                             SettingsTab.STORAGE -> CacheDirectoryGroup(vm.cacheDirectoryGroupState)
                             SettingsTab.SETTINGS_BACKUP -> BackupSettings(vm.cacheDirectoryGroupState)
@@ -731,7 +731,6 @@ private fun getIcon(tab: SettingsTab): ImageVector {
         SettingsTab.SERVER -> Icons.Outlined.Public
         SettingsTab.PROXY -> Icons.Outlined.VpnKey
         SettingsTab.BT -> Icons.Filled.P2p
-        SettingsTab.CLOUD_OFFLINE -> Icons.Outlined.CloudDownload
 //        SettingsTab.CACHE -> Icons.Rounded.Download // Icons.Outlined.Download 太 sharp 了
         SettingsTab.STORAGE -> Icons.Outlined.Storage
         SettingsTab.SETTINGS_BACKUP -> Icons.Outlined.Settings
@@ -754,7 +753,6 @@ private fun getName(tab: SettingsTab): String {
         SettingsTab.SERVER -> stringResource(Lang.settings_tab_danmaku)
         SettingsTab.PROXY -> stringResource(Lang.settings_tab_proxy)
         SettingsTab.BT -> stringResource(Lang.settings_tab_bt)
-        SettingsTab.CLOUD_OFFLINE -> stringResource(Lang.settings_tab_cloud_offline)
 //        SettingsTab.CACHE -> stringResource(Lang.settings_tab_cache)
         SettingsTab.STORAGE -> stringResource(Lang.settings_tab_storage)
         SettingsTab.SETTINGS_BACKUP -> stringResource(Lang.settings_tab_settings_backup)
