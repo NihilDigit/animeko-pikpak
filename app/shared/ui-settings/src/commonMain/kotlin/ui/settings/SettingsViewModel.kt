@@ -25,6 +25,7 @@ import me.him188.ani.app.data.models.danmaku.DanmakuConfigSerializer
 import me.him188.ani.app.data.models.danmaku.DanmakuFilterConfig
 import me.him188.ani.app.data.models.preference.AnalyticsSettings
 import me.him188.ani.app.data.models.preference.AnitorrentConfig
+import me.him188.ani.app.data.models.preference.PikPakConfig
 import me.him188.ani.app.data.models.preference.DanmakuSettings
 import me.him188.ani.app.data.models.preference.DebugSettings
 import me.him188.ani.app.data.models.preference.MediaCacheSettings
@@ -87,6 +88,9 @@ import me.him188.ani.app.ui.user.SelfInfoStateProducer
 import me.him188.ani.danmaku.ui.DanmakuConfig
 import me.him188.ani.datasources.api.source.ConnectionStatus
 import me.him188.ani.datasources.bangumi.BangumiClient
+import me.him188.ani.app.domain.foundation.ScopedHttpClientUserAgent
+import me.him188.ani.torrent.pikpak.testPikPakLogin
+import me.him188.ani.utils.ktor.UnsafeScopedHttpClientApi
 import me.him188.ani.utils.coroutines.IO_
 import me.him188.ani.utils.coroutines.SingleTaskExecutor
 import org.koin.core.component.KoinComponent
@@ -132,6 +136,38 @@ class SettingsViewModel : AbstractSettingsViewModel(), KoinComponent {
     val torrentSettingsState: SettingsState<AnitorrentConfig> =
         settingsRepository.anitorrentConfig.stateInBackground(AnitorrentConfig.Default.copy(_placeholder = -1))
 
+    val pikpakSettingsState: SettingsState<PikPakConfig> =
+        settingsRepository.pikpakConfig.stateInBackground(PikPakConfig.Default)
+
+    // Probes PikPak auth with the currently-displayed credentials. Once the
+    // engine has saved a refresh token and wiped the plaintext password from
+    // disk, we still have a valid auth path — so NOT_ENABLED requires both
+    // fields blank, not just the password.
+    //
+    // We borrow/returnClient around each probe rather than borrowForever:
+    // every click on "测试连接" would otherwise pin a fresh client in the
+    // ref-counted pool until process exit, so after e.g. a proxy change the
+    // old clients (with their sockets / threads) would accumulate.
+    @OptIn(UnsafeScopedHttpClientApi::class)
+    val pikpakConnectionTester: ConnectionTester = ConnectionTester(id = "pikpak") {
+        val cfg = pikpakSettingsState.value
+        if (cfg.username.isEmpty() || (cfg.password.isEmpty() && cfg.refreshToken.isEmpty())) {
+            ConnectionTestResult.NOT_ENABLED
+        } else {
+            val scoped = clientProvider.get(ScopedHttpClientUserAgent.ANI)
+            val ticket = scoped.borrow()
+            try {
+                if (testPikPakLogin(cfg.username, cfg.password, cfg.refreshToken, ticket.client)) {
+                    ConnectionTestResult.SUCCESS
+                } else {
+                    ConnectionTestResult.FAILED
+                }
+            } finally {
+                scoped.returnClient(ticket)
+            }
+        }
+    }
+
     val cacheDirectoryGroupState = CacheDirectoryGroupState(
         mediaCacheSettingsState,
         permissionManager,
@@ -147,7 +183,7 @@ class SettingsViewModel : AbstractSettingsViewModel(), KoinComponent {
         },
     )
 
-    private val mediaSelectorSettingsState: SettingsState<MediaSelectorSettings> =
+    internal val mediaSelectorSettingsState: SettingsState<MediaSelectorSettings> =
         settingsRepository.mediaSelectorSettings.stateInBackground(MediaSelectorSettings.Default.copy(_placeholder = -1))
 
     private val defaultMediaPreferenceState =
@@ -343,6 +379,7 @@ class SettingsViewModel : AbstractSettingsViewModel(), KoinComponent {
             oneshotActionConfig = settingsRepository.oneshotActionConfig.flow.first(),
             analyticsSettings = settingsRepository.analyticsSettings.flow.first(),
             debugSettings = settingsRepository.debugSettings.flow.first(),
+            pikpakConfig = settingsRepository.pikpakConfig.flow.first(),
             tokenStore = tokenRepository.getTokenSaveSnapshot(),
         )
 
@@ -372,6 +409,7 @@ class SettingsViewModel : AbstractSettingsViewModel(), KoinComponent {
         backup.oneshotActionConfig?.let { settingsRepository.oneshotActionConfig.set(it) }
         backup.analyticsSettings?.let { settingsRepository.analyticsSettings.set(it) }
         backup.debugSettings?.let { settingsRepository.debugSettings.set(it) }
+        backup.pikpakConfig?.let { settingsRepository.pikpakConfig.set(it) }
         backup.tokenStore?.let { tokenRepository.restoreFromTokenSave(it) }
 
         return true
@@ -420,5 +458,6 @@ private data class SettingsBackup(
     val oneshotActionConfig: OneshotActionConfig?,
     val analyticsSettings: AnalyticsSettings?,
     val debugSettings: DebugSettings?,
+    val pikpakConfig: PikPakConfig? = null,
     val tokenStore: TokenSave?
 )

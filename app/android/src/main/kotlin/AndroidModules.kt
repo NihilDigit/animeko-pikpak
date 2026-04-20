@@ -14,6 +14,9 @@ import android.os.Environment
 import android.widget.Toast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.runBlocking
 import kotlinx.io.files.Path
 import me.him188.ani.android.navigation.AndroidBrowserNavigator
@@ -33,7 +36,13 @@ import me.him188.ani.app.domain.media.resolver.AndroidWebMediaResolver
 import me.him188.ani.app.domain.media.resolver.HttpStreamingMediaResolver
 import me.him188.ani.app.domain.media.resolver.LocalFileMediaResolver
 import me.him188.ani.app.domain.media.resolver.MediaResolver
+import me.him188.ani.app.domain.media.resolver.OfflineDownloadMediaResolver
 import me.him188.ani.app.domain.media.resolver.TorrentMediaResolver
+import me.him188.ani.torrent.offline.OfflineDownloadEngine
+import me.him188.ani.app.data.models.preference.PikPakConfig
+import me.him188.ani.torrent.pikpak.PikPakCredentials
+import me.him188.ani.torrent.pikpak.PikPakOfflineDownloadEngine
+import me.him188.ani.torrent.pikpak.PikPakSessionStoreAdapter
 import me.him188.ani.app.domain.mediasource.web.AndroidWebCaptchaCoordinator
 import me.him188.ani.app.domain.mediasource.web.WebCaptchaCoordinator
 import me.him188.ani.app.domain.settings.ProxyProvider
@@ -166,10 +175,44 @@ fun getAndroidModules(
         MediampPlayerFactoryLoader.first()
     }
 
+    single<OfflineDownloadEngine> {
+        val settings = get<SettingsRepository>()
+        val configState = settings.pikpakConfig.flow
+            .stateIn(coroutineScope, SharingStarted.Eagerly, initialValue = PikPakConfig.Default)
+        val credentialsFlow = configState
+            .map { cfg ->
+                if (cfg.enabled && cfg.username.isNotEmpty() &&
+                    (cfg.password.isNotEmpty() || cfg.refreshToken.isNotEmpty())
+                ) {
+                    PikPakCredentials(cfg.username, cfg.password)
+                } else null
+            }
+            .stateIn(coroutineScope, SharingStarted.Eagerly, initialValue = null)
+        val sessionStore = PikPakSessionStoreAdapter(
+            readRefreshToken = { configState.value.refreshToken },
+            writeRefreshToken = { rt ->
+                settings.pikpakConfig.update { copy(refreshToken = rt) }
+            },
+            onSessionSaved = {
+                settings.pikpakConfig.update {
+                    if (password.isEmpty()) this else copy(password = "")
+                }
+            },
+        )
+        PikPakOfflineDownloadEngine(
+            scopedHttpClient = get<HttpClientProvider>().get(ScopedHttpClientUserAgent.ANI),
+            credentials = credentialsFlow,
+            scope = coroutineScope,
+            sessionStore = sessionStore,
+            slotQueueLength = { configState.value.slotQueueLength },
+        )
+    }
     factory<MediaResolver> {
+        val torrentResolvers = get<TorrentManager>().engines.map { TorrentMediaResolver(it, get()) }
+        val btFallback = MediaResolver.from(torrentResolvers)
         MediaResolver.from(
-            get<TorrentManager>().engines
-                .map { TorrentMediaResolver(it, get()) }
+            listOf<MediaResolver>(OfflineDownloadMediaResolver(get(), fallback = btFallback))
+                .plus(torrentResolvers)
                 .plus(LocalFileMediaResolver())
                 .plus(HttpStreamingMediaResolver())
                 .plus(
