@@ -41,7 +41,7 @@ kotlin {
         // Auth, captcha, rate limiting, OSS signing, GCID etc. live in the
         // SDK — this module only supplies the offline-task orchestration
         // layer on top. See https://github.com/NihilDigit/pikpak-kotlin.
-        api("io.github.nihildigit:pikpak-kotlin:0.4.2")
+        api("io.github.nihildigit:pikpak-kotlin:0.4.3")
     }
     sourceSets.commonTest.dependencies {
         implementation(kotlin("test"))
@@ -50,5 +50,11 @@ kotlin {
     sourceSets.getByName("desktopTest").dependencies {
         implementation(libs.kotlinx.coroutines.test)
         implementation(kotlin("test"))
+        // Mock engine drives PikPakKtorAbiCompatTest, which forces the SDK's
+        // Ktor companion-object accesses (HttpMethod.Post, ContentType.*, ...)
+        // to resolve against animeko's pinned Ktor version. If the SDK was
+        // built against an incompatible Ktor ABI, the first request path
+        // throws IllegalAccessError at link time and the test fails.
+        implementation(libs.ktor.client.mock)
     }
 }
