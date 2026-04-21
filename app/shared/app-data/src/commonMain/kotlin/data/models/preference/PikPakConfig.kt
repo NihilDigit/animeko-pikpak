@@ -25,11 +25,13 @@ import kotlinx.serialization.Serializable
  * (not user-editable). It lets the next app launch skip the rate-limited
  * `/v1/auth/signin` endpoint and go straight to a cheap refresh.
  *
- * [password] is accepted from the settings UI to bootstrap the first signin,
- * but the engine clears it from this config once a refresh token has been
- * obtained — so the password is not persisted to disk across app restarts. If
- * the refresh token later becomes invalid, the UI will ask for the password
- * again.
+ * [password] is accepted from the settings UI to bootstrap the first signin.
+ * It is currently kept plaintext in DataStore so the engine can silently
+ * re-signin if the stored refresh token gets revoked server-side. See the
+ * `TODO(pikpak-credential-keystore)` comment in the platform Koin modules
+ * for the proper OS-keystore migration that should restore the post-signin
+ * wipe. The settings UI never echoes the stored value back — the password
+ * edit dialog always opens empty.
  */
 @Serializable
 data class PikPakConfig(

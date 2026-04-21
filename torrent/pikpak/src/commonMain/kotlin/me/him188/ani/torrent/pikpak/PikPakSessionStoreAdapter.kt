@@ -24,11 +24,14 @@ import io.github.nihildigit.pikpak.SessionStore
  * [readRefreshToken] yields an empty string, we return `null` and the SDK
  * falls through to full credentials sign-in.
  *
- * [onSessionSaved] is invoked after a successful [save] — platform modules
- * hook this up to wipe the plaintext password from disk. The password is
- * only needed until we have a working refresh token; keeping it around
- * past that point would be a real liability if the DataStore file ever
- * leaks.
+ * [onSessionSaved] is invoked after a successful [save]. It is meant as a
+ * hook for platform modules to do post-signin hygiene on the credentials —
+ * historically wiping the plaintext password from DataStore. That wipe is
+ * currently a no-op (see the `TODO(pikpak-credential-keystore)` comments in
+ * the platform Koin modules) because the engine has no OS-keystore fallback
+ * yet, so we keep the password on disk to recover when the refresh token
+ * gets revoked. The callback contract stays in place so a future keystore
+ * migration can restore the wipe without touching this adapter.
  */
 class PikPakSessionStoreAdapter(
     private val readRefreshToken: () -> String,

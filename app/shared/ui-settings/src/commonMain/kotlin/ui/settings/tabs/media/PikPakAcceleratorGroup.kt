@@ -103,30 +103,36 @@ internal fun SettingsScope.PikPakAcceleratorGroup(
                     },
                 )
 
-                // The password is only held until the engine signs in and stores a
-                // refresh token; after that, it's wiped from disk. Keep the masked
-                // placeholder visible while a refresh token is live so the user sees
-                // "we're authenticated" instead of "looks like I lost my password".
+                // The password persists in DataStore (see onSessionSaved TODO in
+                // the platform modules), but the UI deliberately never echoes
+                // the stored value back: the edit dialog opens empty every time
+                // so neither shoulder-surfing nor the visibility toggle can
+                // surface what's on disk. The collapsed row shows a masked
+                // placeholder whenever a refresh token is live — that's the
+                // "we're authenticated" signal — otherwise it renders empty.
                 val hasLiveSession = config.refreshToken.isNotEmpty()
                 TextFieldItem(
-                    value = config.password,
+                    value = "",
                     title = { Text(stringResource(Lang.settings_pikpak_password)) },
                     description = { Text(stringResource(Lang.settings_pikpak_password_description)) },
-                    exposedItem = { value ->
+                    exposedItem = {
                         Text(
-                            if (value.isEmpty() && !hasLiveSession) ""
-                            else stringResource(Lang.settings_pikpak_password_hidden),
+                            if (hasLiveSession) stringResource(Lang.settings_pikpak_password_hidden)
+                            else "",
                         )
                     },
                     sanitizeValue = { it },
                     visualTransformation = PasswordVisualTransformation(),
                     showVisibilityToggle = true,
-                    // User re-entering a password is a signal that the stored
-                    // session should be considered stale (password change on
-                    // PikPak's side doesn't always revoke tokens, but forcing
-                    // a full signin with the fresh password is the safe default).
+                    // A non-empty confirm is treated as "user supplied a fresh
+                    // password" and invalidates the stored refresh token so the
+                    // next engine call does a full signin. An empty confirm is
+                    // a no-op — we never let the UI clear a stored password,
+                    // since the field is opened empty on every edit and an
+                    // accidental confirm would otherwise destroy the only
+                    // credential the engine has left.
                     onValueChangeCompleted = { newPassword ->
-                        if (newPassword != config.password) {
+                        if (newPassword.isNotEmpty()) {
                             state.update(
                                 config.copy(
                                     password = newPassword,

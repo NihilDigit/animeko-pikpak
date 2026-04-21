@@ -193,11 +193,17 @@ fun getAndroidModules(
             writeRefreshToken = { rt ->
                 settings.pikpakConfig.update { copy(refreshToken = rt) }
             },
-            onSessionSaved = {
-                settings.pikpakConfig.update {
-                    if (password.isEmpty()) this else copy(password = "")
-                }
-            },
+            // TODO(pikpak-credential-keystore): persist the password through
+            //  an OS keystore (Android KeyStore / Secret Service / iOS Keychain)
+            //  and restore the post-signin wipe. The wipe was the original
+            //  design for credential hygiene, but without an encrypted fallback
+            //  store the engine had no recovery path when the saved refresh
+            //  token got revoked (e.g. a different client signed into the same
+            //  account) — Test / playback would silently fail until the user
+            //  re-typed the password. Leaving the plaintext in DataStore is the
+            //  interim trade-off; PikPakAcceleratorGroup no longer echoes the
+            //  stored value back to the password field.
+            onSessionSaved = {},
         )
         PikPakOfflineDownloadEngine(
             scopedHttpClient = get<HttpClientProvider>().get(ScopedHttpClientUserAgent.ANI),

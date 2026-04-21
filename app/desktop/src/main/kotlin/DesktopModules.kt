@@ -139,8 +139,7 @@ fun getDesktopModules(getContext: () -> DesktopContext, scope: CoroutineScope) =
             .stateIn(scope, SharingStarted.Eagerly, initialValue = PikPakConfig.Default)
         // Credentials are "usable" when we have a password to sign in with
         // *or* a previously-persisted refresh token — either way the SDK
-        // has something to authenticate with. Once the refresh token is
-        // live, the plaintext password is wiped by `onSessionSaved` below.
+        // has something to authenticate with.
         val credentialsFlow = configState
             .map { cfg ->
                 if (cfg.enabled && cfg.username.isNotEmpty() &&
@@ -155,14 +154,17 @@ fun getDesktopModules(getContext: () -> DesktopContext, scope: CoroutineScope) =
             writeRefreshToken = { rt ->
                 settings.pikpakConfig.update { copy(refreshToken = rt) }
             },
-            onSessionSaved = {
-                // Drop the plaintext password now that the refresh token is
-                // live. The UI key still shows "••••••" as long as the
-                // refresh token is present, so the user sees a stable state.
-                settings.pikpakConfig.update {
-                    if (password.isEmpty()) this else copy(password = "")
-                }
-            },
+            // TODO(pikpak-credential-keystore): persist the password through
+            //  an OS keystore (Android KeyStore / Secret Service / iOS Keychain)
+            //  and restore the post-signin wipe. The wipe was the original
+            //  design for credential hygiene, but without an encrypted fallback
+            //  store the engine had no recovery path when the saved refresh
+            //  token got revoked (e.g. a different client signed into the same
+            //  account) — Test / playback would silently fail until the user
+            //  re-typed the password. Leaving the plaintext in DataStore is the
+            //  interim trade-off; PikPakAcceleratorGroup no longer echoes the
+            //  stored value back to the password field.
+            onSessionSaved = {},
         )
         PikPakOfflineDownloadEngine(
             scopedHttpClient = get<HttpClientProvider>().get(ScopedHttpClientUserAgent.ANI),
