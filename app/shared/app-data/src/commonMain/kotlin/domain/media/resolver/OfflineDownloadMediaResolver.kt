@@ -85,32 +85,26 @@ class OfflineDownloadMediaResolver(
         logger.info {
             "[${engine.id}] resolving media '${media.mediaId}' via ${engine.displayName}"
         }
+        // A caller cancel must propagate, but [TimeoutCancellationException]
+        // (also a CancellationException) is the engine signalling "I didn't
+        // deliver in time" — that's a legitimate engine failure and should
+        // still reach fallback, not be mistaken for a user stop. The catches
+        // must stay ordered subclass-first: Kotlin picks the first matching
+        // block, so TimeoutCancellationException must precede CancellationException.
         val resolved = try {
             engine.resolve(uri, pickVideoFile)
+        } catch (e: TimeoutCancellationException) {
+            return handleEngineFailure(media, episode, e, ResolutionFailures.FETCH_TIMEOUT)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: OfflineDownloadAuthException) {
+            return handleEngineFailure(media, episode, e, ResolutionFailures.ENGINE_ERROR)
+        } catch (e: OfflineDownloadRejectedException) {
+            return handleEngineFailure(media, episode, e, ResolutionFailures.NO_MATCHING_RESOURCE)
+        } catch (e: IOException) {
+            return handleEngineFailure(media, episode, e, ResolutionFailures.NETWORK_ERROR)
         } catch (e: Throwable) {
-            // A caller cancel must propagate, but [TimeoutCancellationException]
-            // (also a CancellationException) is the engine signalling "I didn't
-            // deliver in time" — that's a legitimate engine failure and should
-            // still reach fallback, not be mistaken for a user stop.
-            if (e is CancellationException && e !is TimeoutCancellationException) {
-                throw e
-            }
-            val reason = when (e) {
-                is OfflineDownloadAuthException -> ResolutionFailures.ENGINE_ERROR
-                is OfflineDownloadRejectedException -> ResolutionFailures.NO_MATCHING_RESOURCE
-                is TimeoutCancellationException -> ResolutionFailures.FETCH_TIMEOUT
-                is IOException -> ResolutionFailures.NETWORK_ERROR
-                else -> ResolutionFailures.ENGINE_ERROR
-            }
-            val fb = fallback
-            if (fb != null && fb.supports(media)) {
-                logger.warn(e) {
-                    "[${engine.id}] resolve failed ($reason); falling back to local resolver"
-                }
-                return fb.resolve(media, episode)
-            }
-            logger.warn(e) { "[${engine.id}] resolve failed ($reason); no fallback available" }
-            throw MediaResolutionException(reason, e)
+            return handleEngineFailure(media, episode, e, ResolutionFailures.ENGINE_ERROR)
         }
 
         return HttpStreamingMediaDataProvider(
@@ -119,5 +113,22 @@ class OfflineDownloadMediaResolver(
             headers = emptyMap(),
             extraFiles = media.extraFiles.toMediampMediaExtraFiles(),
         )
+    }
+
+    private suspend fun handleEngineFailure(
+        media: Media,
+        episode: EpisodeMetadata,
+        cause: Throwable,
+        reason: ResolutionFailures,
+    ): MediaDataProvider<MediaData> {
+        val fb = fallback
+        if (fb != null && fb.supports(media)) {
+            logger.warn(cause) {
+                "[${engine.id}] resolve failed ($reason); falling back to local resolver"
+            }
+            return fb.resolve(media, episode)
+        }
+        logger.warn(cause) { "[${engine.id}] resolve failed ($reason); no fallback available" }
+        throw MediaResolutionException(reason, cause)
     }
 }

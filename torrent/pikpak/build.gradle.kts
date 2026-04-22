@@ -53,12 +53,14 @@ kotlin {
         api("io.github.nihildigit:pikpak-kotlin:0.4.3")
     }
     sourceSets.commonTest.dependencies {
-        implementation(kotlin("test"))
-        implementation(libs.kotlinx.coroutines.test)
+        // kotlin-test + kotlinx-coroutines-test come in transitively from
+        // :utils:testing (injected by ani-mpp-lib-targets). Declaring
+        // `kotlin("test")` here triggers JVM variant inference to
+        // kotlin-test-junit (JUnit 4), which collides with the JUnit 5
+        // variant the de.mannodermaus.android-junit5 plugin pulls onto
+        // androidDeviceTestCompileClasspath — same capability, two modules.
     }
     sourceSets.getByName("desktopTest").dependencies {
-        implementation(libs.kotlinx.coroutines.test)
-        implementation(kotlin("test"))
         // Mock engine drives PikPakKtorAbiCompatTest, which forces the SDK's
         // Ktor companion-object accesses (HttpMethod.Post, ContentType.*, ...)
         // to resolve against animeko's pinned Ktor version. If the SDK was

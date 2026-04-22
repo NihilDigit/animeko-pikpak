@@ -113,7 +113,8 @@ class OfflineDownloadMediaResolverTest {
         )
         val resolver = OfflineDownloadMediaResolver(engine)
         val provider = resolver.resolve(magnetMedia, episode)
-        val opened = (provider as MediaDataProvider<UriMediaData>).open(kotlinx.coroutines.CoroutineScope(kotlin.coroutines.EmptyCoroutineContext))
+        val opened = assertIs<HttpStreamingMediaDataProvider>(provider)
+            .open(kotlinx.coroutines.CoroutineScope(kotlin.coroutines.EmptyCoroutineContext))
         assertEquals("https://cdn.example/signed.mp4", opened.uri)
     }
 
