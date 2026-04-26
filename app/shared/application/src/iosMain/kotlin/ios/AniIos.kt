@@ -326,16 +326,15 @@ fun getIosModules(
             writeRefreshToken = { rt ->
                 settings.pikpakConfig.update { copy(refreshToken = rt) }
             },
-            // TODO(pikpak-credential-keystore): persist the password through
-            //  an OS keystore (Android KeyStore / Secret Service / iOS Keychain)
-            //  and restore the post-signin wipe. The wipe was the original
-            //  design for credential hygiene, but without an encrypted fallback
-            //  store the engine had no recovery path when the saved refresh
-            //  token got revoked (e.g. a different client signed into the same
-            //  account) — Test / playback would silently fail until the user
-            //  re-typed the password. Leaving the plaintext in DataStore is the
-            //  interim trade-off; PikPakAcceleratorGroup no longer echoes the
-            //  stored value back to the password field.
+            // PikPakConfig.password stays on disk obscured (AES-CTR with a
+            // hardcoded key, the same approach as `rclone obscure`; see
+            // ObscuredStringSerializer). We need to keep it because a
+            // server-side revoke of the refresh token would otherwise leave
+            // the engine with no recovery path — Test and playback would
+            // silently fail until the user re-typed the password.
+            // PikPakAcceleratorGroup never echoes the stored value back to
+            // the password field, so the obscured copy is what the eyedrop
+            // attacker would see.
             onSessionSaved = {},
         )
         PikPakOfflineDownloadEngine(

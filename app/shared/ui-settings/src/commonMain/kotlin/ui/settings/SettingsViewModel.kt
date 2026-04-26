@@ -139,10 +139,11 @@ class SettingsViewModel : AbstractSettingsViewModel(), KoinComponent {
     val pikpakSettingsState: SettingsState<PikPakConfig> =
         settingsRepository.pikpakConfig.stateInBackground(PikPakConfig.Default)
 
-    // Probes PikPak auth with the currently-displayed credentials. Once the
-    // engine has saved a refresh token and wiped the plaintext password from
-    // disk, we still have a valid auth path — so NOT_ENABLED requires both
-    // fields blank, not just the password.
+    // Probes PikPak auth with the currently-displayed credentials. The engine
+    // keeps the password persisted (obscured, see PikPakConfig.password) so a
+    // revoked refresh token can be recovered without prompting the user; an
+    // existing refresh token is also a usable auth path on its own. NOT_ENABLED
+    // therefore requires both credential fields blank, not just the password.
     //
     // We borrow/returnClient around each probe rather than borrowForever:
     // every click on "测试连接" would otherwise pin a fresh client in the
