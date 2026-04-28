@@ -380,7 +380,11 @@ class SettingsViewModel : AbstractSettingsViewModel(), KoinComponent {
             oneshotActionConfig = settingsRepository.oneshotActionConfig.flow.first(),
             analyticsSettings = settingsRepository.analyticsSettings.flow.first(),
             debugSettings = settingsRepository.debugSettings.flow.first(),
-            pikpakConfig = settingsRepository.pikpakConfig.flow.first(),
+            // Account credentials must not leak into exported settings; keep
+            // the field present so the backup schema stays stable, but write
+            // a credential-free Default. restoreSettingsBackup intentionally
+            // ignores it for the same reason.
+            pikpakConfig = PikPakConfig.Default,
             tokenStore = tokenRepository.getTokenSaveSnapshot(),
         )
 
@@ -410,7 +414,10 @@ class SettingsViewModel : AbstractSettingsViewModel(), KoinComponent {
         backup.oneshotActionConfig?.let { settingsRepository.oneshotActionConfig.set(it) }
         backup.analyticsSettings?.let { settingsRepository.analyticsSettings.set(it) }
         backup.debugSettings?.let { settingsRepository.debugSettings.set(it) }
-        backup.pikpakConfig?.let { settingsRepository.pikpakConfig.set(it) }
+        // pikpakConfig deliberately not restored: see serializeSettingsBackup.
+        // Older backups produced before that change may still carry real
+        // credentials, and we don't want a restore to silently re-introduce
+        // them on a different device.
         backup.tokenStore?.let { tokenRepository.restoreFromTokenSave(it) }
 
         return true
